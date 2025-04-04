@@ -12,7 +12,7 @@ from openai import OpenAI
 
 def chat_completion(messages):
     """调用API: https://siliconflow.cn/zh-cn/models"""
-    API_KEY = "sk-jpfjilbfchmvhucojngxmzqabmyhcgkfphkgrzyrzehxzfpm"
+    API_KEY = "API-key"
     API_URL = "https://api.siliconflow.cn/v1/chat/completions"
     model = "deepseek-ai/DeepSeek-R1"
     
