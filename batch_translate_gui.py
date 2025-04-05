@@ -10,14 +10,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue
 from openai import OpenAI
 
-def chat_completion(messages):
+def chat_completion(messages, api_key):
     """调用API: https://siliconflow.cn/zh-cn/models"""
-    API_KEY = "API-key"
     API_URL = "https://api.siliconflow.cn/v1/chat/completions"
     model = "deepseek-ai/DeepSeek-R1"
     
     headers = {
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
@@ -540,8 +539,8 @@ class TranslatorGUI:
         
         try:
             if provider == "硅基流动":
-                # 原有的硅基流动API调用代码
-                response = chat_completion(messages)
+                # 使用传入的API_KEY调用硅基流动API
+                response = chat_completion(messages, api_key)
                 return response
             elif provider == "Deepseek":
                 # Deepseek API调用
