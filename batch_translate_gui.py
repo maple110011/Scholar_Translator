@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import ttk, scrolledtext, filedialog
 import tkinterdnd2 as tkdnd
 import json
 import os
@@ -35,14 +35,6 @@ def chat_completion(messages, api_key):
     except Exception as e:
         print(f"API请求失败: {str(e)}")
         return None
-
-def save_conversation_to_markdown(conversation, filename):
-    """将AI助手的回复保存为文本文件，每行一个回答，跳过第一个"收到"的回复"""
-    with open(filename, 'w', encoding='utf-8') as f:
-        # 跳过第一个"收到"的回复
-        assistant_responses = [msg for msg in conversation if msg["role"] == "assistant"][1:]
-        for msg in assistant_responses:
-            f.write(f"{msg['content']}\n")
 
 class TranslatorGUI:
     def __init__(self, root):
@@ -124,7 +116,7 @@ class TranslatorGUI:
         ttk.Label(self.param_frame, text="API Key:").grid(row=1, column=0, sticky=tk.W, padx=5)
         self.api_key = ttk.Entry(self.param_frame, width=50)
         self.api_key.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5)
-        self.api_key.insert(0, "API-key")
+        self.api_key.insert(0, "sk-mqhukmwhjfdqrrsxlppopspvgxpzixlxncevsrlhsxmohfnl")
         
         # 模型设置
         ttk.Label(self.param_frame, text="模型:").grid(row=2, column=0, sticky=tk.W, padx=5)
@@ -149,6 +141,26 @@ class TranslatorGUI:
         self.parallel_count = ttk.Spinbox(self.param_frame, from_=1, to=10, width=10)
         self.parallel_count.grid(row=5, column=1, sticky=(tk.W, tk.E), padx=5)
         self.parallel_count.set(3)  # 默认值
+
+        # 翻译结果保存路径设置
+        ttk.Label(self.param_frame, text="翻译结果保存路径:").grid(row=6, column=0, sticky=tk.W, padx=5)
+        self.result_path_frame = ttk.Frame(self.param_frame)
+        self.result_path_frame.grid(row=6, column=1, sticky=(tk.W, tk.E), padx=5)
+        self.result_path = ttk.Entry(self.result_path_frame, width=40)
+        self.result_path.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.result_path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "TranslateResult"))
+        self.result_path_button = ttk.Button(self.result_path_frame, text="浏览", command=self.browse_result_path)
+        self.result_path_button.pack(side=tk.RIGHT, padx=5)
+
+        # 缓存文件保存路径设置
+        ttk.Label(self.param_frame, text="缓存文件保存路径:").grid(row=7, column=0, sticky=tk.W, padx=5)
+        self.cache_path_frame = ttk.Frame(self.param_frame)
+        self.cache_path_frame.grid(row=7, column=1, sticky=(tk.W, tk.E), padx=5)
+        self.cache_path = ttk.Entry(self.cache_path_frame, width=40)
+        self.cache_path.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.cache_path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache"))
+        self.cache_path_button = ttk.Button(self.cache_path_frame, text="浏览", command=self.browse_cache_path)
+        self.cache_path_button.pack(side=tk.RIGHT, padx=5)
         
         # 创建右侧框架
         self.right_frame = ttk.Frame(self.main_frame)
@@ -256,7 +268,20 @@ class TranslatorGUI:
         
         # 添加翻译结果存储
         self.translation_results = {}
+
+    def save_conversation_to_markdown(self, conversation, filename):
+        """将AI助手的回复保存为markdown文件"""
+        # 确保缓存目录存在
+        cache_dir = self.cache_path.get()
+        os.makedirs(cache_dir, exist_ok=True)
         
+        file_path = os.path.join(cache_dir, filename)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            # 跳过第一个"收到"的回复
+            assistant_responses = [msg for msg in conversation if msg["role"] == "assistant"][1:]
+            for msg in assistant_responses:
+                f.write(f"{msg['content']}\n\n")
+
     def create_chapter_progress(self, chapter_index, title):
         """为每个章节创建进度条"""
         # 创建章节进度框架
@@ -578,7 +603,7 @@ class TranslatorGUI:
             
             if response:
                 messages.append({"role": "assistant", "content": response})
-                # 不将"收到"保存到conversation中
+                conversation.append({"role": "assistant", "content": response})
                 self.log("确认完成")
                 self.log(f"{'-'*60}")
             
@@ -656,7 +681,7 @@ class TranslatorGUI:
             # 保存翻译结果
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"conversation_{timestamp}_chapter_{chapter_index}.md"
-            save_conversation_to_markdown(conversation, filename)
+            self.save_conversation_to_markdown(conversation, filename)
             self.log(f"\n第 {chapter_index} 章翻译记录已保存到: {filename}")
             
             # 保存翻译结果到内存
@@ -673,7 +698,7 @@ class TranslatorGUI:
             if 'conversation' in locals():
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"conversation_{timestamp}_chapter_{chapter_index}_error.md"
-                save_conversation_to_markdown(conversation, filename)
+                self.save_conversation_to_markdown(conversation, filename)
                 self.log(f"\n第 {chapter_index} 章部分翻译记录已保存到: {filename}")
                 
                 self.translation_results[chapter_index] = {
@@ -710,14 +735,14 @@ class TranslatorGUI:
                     merged_content.append(result['title'])
                     merged_content.append('')  # 标题后添加空行
                     
-                    # 添加翻译内容
-                    for msg in result['conversation']:
-                        if msg['role'] == 'assistant':
-                            # 确保每个段落之间有空行
-                            content = msg['content'].strip()
-                            if content:  # 只添加非空内容
-                                merged_content.append(content)
-                                merged_content.append('')  # 段落后添加空行
+                    # 添加翻译内容，跳过第一个"收到"的回复
+                    assistant_messages = [msg for msg in result['conversation'] if msg['role'] == 'assistant'][1:]
+                    for msg in assistant_messages:
+                        # 确保每个段落之间有空行
+                        content = msg['content'].strip()
+                        if content:  # 只添加非空内容
+                            merged_content.append(content)
+                            merged_content.append('')  # 段落后添加空行
                 else:
                     # 对于未翻译的章节，添加原始标题和提示
                     title = self.filtered_batches[chapter_index - 1][0]
@@ -729,26 +754,21 @@ class TranslatorGUI:
                 # 章节之间添加额外的空行
                 merged_content.append('')
             
+            # 确保结果目录存在
+            result_dir = self.result_path.get()
+            os.makedirs(result_dir, exist_ok=True)
+            
             # 保存合并后的文件
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             merged_filename = f"translation_{timestamp}_merged.md"
-            with open(merged_filename, 'w', encoding='utf-8') as f:
+            merged_file_path = os.path.join(result_dir, merged_filename)
+            with open(merged_file_path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(merged_content))
             
             self.log(f"\n{'='*60}")
             self.log("文件处理完成:")
             self.log(f"{'─'*30}")
-            self.log(f"合并后的翻译结果已保存到: {merged_filename}")
-            
-            # 删除各章节的独立翻译文件
-            for chapter_index, result in self.translation_results.items():
-                try:
-                    if os.path.exists(result['filename']):
-                        os.remove(result['filename'])
-                        self.log(f"已删除第 {chapter_index} 章的独立翻译文件")
-                except Exception as e:
-                    self.log(f"删除第 {chapter_index} 章的独立翻译文件时出错: {str(e)}")
-            self.log(f"{'─'*30}")
+            self.log(f"合并后的翻译结果已保存到: {merged_file_path}")
             
         except Exception as e:
             self.log(f"\n{'='*60}")
@@ -756,7 +776,7 @@ class TranslatorGUI:
             self.log(f"{'─'*30}")
             self.log(str(e))
             self.log(f"{'─'*30}")
-    
+
     def start_translation(self):
         if not self.file_queue:
             self.log("请先拖放markdown文件")
@@ -860,6 +880,9 @@ class TranslatorGUI:
             self.log("所有文件翻译完成！")
             self.log(f"{'='*60}")
             
+            # 所有文件翻译完成后，询问是否删除缓存文件
+            self.root.after(0, self._ask_delete_cache, self.cache_path.get())
+            
         except Exception as e:
             self.log(f"\n{'='*60}")
             self.log("错误信息:")
@@ -874,6 +897,41 @@ class TranslatorGUI:
         self.start_button.state(['!disabled'])
         self.is_translating = False
         self.current_file_index = -1
+
+    def browse_result_path(self):
+        """浏览并选择翻译结果保存路径"""
+        path = filedialog.askdirectory()
+        if path:
+            self.result_path.delete(0, tk.END)
+            self.result_path.insert(0, path)
+
+    def browse_cache_path(self):
+        """浏览并选择缓存文件保存路径"""
+        path = filedialog.askdirectory()
+        if path:
+            self.cache_path.delete(0, tk.END)
+            self.cache_path.insert(0, path)
+
+    def _ask_delete_cache(self, cache_dir):
+        """询问用户是否删除缓存目录中的文件"""
+        response = tk.messagebox.askyesno(
+            "删除缓存文件",
+            "所有文件翻译已完成，是否删除翻译过程中的缓存文件？"
+        )
+        if response:
+            try:
+                if os.path.exists(cache_dir):
+                    # 删除目录中的所有文件
+                    for file_name in os.listdir(cache_dir):
+                        file_path = os.path.join(cache_dir, file_name)
+                        if os.path.isfile(file_path):
+                            os.remove(file_path)
+                            self.log(f"已删除缓存文件: {file_name}")
+                    self.log("所有缓存文件已删除")
+            except Exception as e:
+                self.log(f"删除缓存文件时出错: {str(e)}")
+        else:
+            self.log("已保留缓存文件")
 
 def main():
     root = tkdnd.TkinterDnD.Tk()
