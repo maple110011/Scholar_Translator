@@ -9,6 +9,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue
 from openai import OpenAI
+import time
 
 def chat_completion(messages, api_key):
     """调用API: https://siliconflow.cn/zh-cn/models"""
@@ -41,6 +42,16 @@ class TranslatorGUI:
         self.root = root
         self.root.title("学术论文翻译助手")
         self.root.geometry("1200x900")  # 增加窗口大小
+        
+        # 添加窗口状态变化事件处理
+        self.root.bind('<Unmap>', self.on_window_minimize)  # 窗口最小化事件
+        self.root.bind('<Map>', self.on_window_restore)     # 窗口恢复事件
+        
+        # 添加线程控制变量
+        self.translation_thread = None
+        self.is_translating = False
+        self.is_paused = False
+        self.should_stop = False
         
         # 创建主框架
         self.main_frame = ttk.Frame(root, padding="10")
@@ -109,14 +120,14 @@ class TranslatorGUI:
         ttk.Label(self.param_frame, text="API提供商:").grid(row=0, column=0, sticky=tk.W, padx=5)
         self.api_provider = ttk.Combobox(self.param_frame, values=["硅基流动", "Deepseek"], state="readonly")
         self.api_provider.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
-        self.api_provider.set("硅基流动")
+        self.api_provider.set("Deepseek")
         self.api_provider.bind('<<ComboboxSelected>>', self.on_api_provider_change)
         
         # API设置
         ttk.Label(self.param_frame, text="API Key:").grid(row=1, column=0, sticky=tk.W, padx=5)
         self.api_key = ttk.Entry(self.param_frame, width=50)
         self.api_key.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5)
-        self.api_key.insert(0, "sk-mqhukmwhjfdqrrsxlppopspvgxpzixlxncevsrlhsxmohfnl")
+        self.api_key.insert(0, "sk-fd52737a69064f51a34a091d8331fdf6")
         
         # 模型设置
         ttk.Label(self.param_frame, text="模型:").grid(row=2, column=0, sticky=tk.W, padx=5)
@@ -250,10 +261,6 @@ class TranslatorGUI:
         self.current_file_index = -1
         self.file_status_labels = {}  # 存储文件状态标签
         
-        # 添加线程控制变量
-        self.translation_thread = None
-        self.is_translating = False
-        
         # 创建日志队列
         self.log_queue = Queue()
         
@@ -284,53 +291,95 @@ class TranslatorGUI:
 
     def create_chapter_progress(self, chapter_index, title):
         """为每个章节创建进度条"""
-        # 创建章节进度框架
-        chapter_frame = ttk.Frame(self.chapter_progress_container)
-        chapter_frame.grid(row=chapter_index-1, column=0, sticky=(tk.W, tk.E), pady=2)
-        
-        # 创建章节标签
-        label = ttk.Label(chapter_frame, text=f"第{chapter_index}章: {title[:20]}...")
-        label.grid(row=0, column=0, sticky=tk.W)
-        self.chapter_labels[chapter_index] = label
-        
-        # 创建进度条
-        progress_var = tk.DoubleVar()
-        progress_bar = ttk.Progressbar(chapter_frame, variable=progress_var, maximum=100)
-        progress_bar.grid(row=0, column=1, sticky=(tk.W, tk.E))
-        
-        # 保存进度条变量
-        self.chapter_progress_vars[chapter_index] = progress_var
-        self.chapter_progress_bars[chapter_index] = progress_bar
-        
+        try:
+            if not self.root.winfo_exists():
+                return
+            # 创建章节进度框架
+            if not hasattr(self, 'chapter_progress_container') or not self.chapter_progress_container.winfo_exists():
+                return
+                
+            chapter_frame = ttk.Frame(self.chapter_progress_container)
+            chapter_frame.grid(row=chapter_index-1, column=0, sticky=(tk.W, tk.E), pady=2)
+            
+            # 创建章节标签
+            label = ttk.Label(chapter_frame, text=f"第{chapter_index}章: {title[:20]}...")
+            label.grid(row=0, column=0, sticky=tk.W)
+            self.chapter_labels[chapter_index] = label
+            
+            # 创建进度条
+            progress_var = tk.DoubleVar()
+            progress_bar = ttk.Progressbar(chapter_frame, variable=progress_var, maximum=100)
+            progress_bar.grid(row=0, column=1, sticky=(tk.W, tk.E))
+            
+            # 保存进度条变量
+            self.chapter_progress_vars[chapter_index] = progress_var
+            self.chapter_progress_bars[chapter_index] = progress_bar
+            
+            # 更新Canvas的滚动区域
+            if hasattr(self, 'progress_canvas') and self.progress_canvas.winfo_exists():
+                self.progress_canvas.configure(scrollregion=self.progress_canvas.bbox("all"))
+        except Exception as e:
+            print(f"创建进度条时出错: {str(e)}")
+    
     def update_chapter_progress(self, chapter_index, value):
         """更新指定章节的进度条"""
+        if not self.root.winfo_exists():
+            return
         if chapter_index in self.chapter_progress_vars:
-            self.root.after(0, self._update_chapter_progress, chapter_index, value)
+            self.root.after(0, lambda: self._update_chapter_progress(chapter_index, value))
     
     def _update_chapter_progress(self, chapter_index, value):
         """在主线程中更新章节进度条"""
-        self.chapter_progress_vars[chapter_index].set(value)
+        try:
+            if not self.root.winfo_exists():
+                return
+            if chapter_index in self.chapter_progress_vars:
+                self.chapter_progress_vars[chapter_index].set(value)
+        except Exception as e:
+            print(f"更新章节进度条时出错: {str(e)}")
     
     def update_total_progress(self, completed_paragraphs, total_paragraphs):
         """更新总进度条"""
-        self.root.after(0, self._update_total_progress, completed_paragraphs, total_paragraphs)
+        if not self.root.winfo_exists():
+            return
+        self.root.after(0, lambda: self._update_total_progress(completed_paragraphs, total_paragraphs))
     
     def _update_total_progress(self, completed_paragraphs, total_paragraphs):
         """在主线程中更新总进度条"""
-        self.completed_paragraphs = completed_paragraphs
-        self.total_paragraphs = total_paragraphs
-        if total_paragraphs > 0:
-            progress = (completed_paragraphs / total_paragraphs) * 100
-            self.total_progress_var.set(progress)
-            self.current_chapter_label.config(text=f"已翻译: {completed_paragraphs}/{total_paragraphs} 段")
+        try:
+            if not self.root.winfo_exists():
+                return
+            self.completed_paragraphs = completed_paragraphs
+            self.total_paragraphs = total_paragraphs
+            if total_paragraphs > 0:
+                progress = (completed_paragraphs / total_paragraphs) * 100
+                self.total_progress_var.set(progress)
+                if hasattr(self, 'current_chapter_label') and self.current_chapter_label.winfo_exists():
+                    self.current_chapter_label.config(text=f"已翻译: {completed_paragraphs}/{total_paragraphs} 段")
+        except Exception as e:
+            print(f"更新总进度条时出错: {str(e)}")
     
     def clear_chapter_progress(self):
         """清除所有章节进度条"""
-        for widget in self.chapter_progress_container.winfo_children():
-            widget.destroy()
-        self.chapter_progress_vars.clear()
-        self.chapter_progress_bars.clear()
-        self.chapter_labels.clear()
+        try:
+            if not self.root.winfo_exists():
+                return
+            # 清除进度条变量
+            self.chapter_progress_vars.clear()
+            self.chapter_progress_bars.clear()
+            self.chapter_labels.clear()
+            
+            # 清除Canvas中的内容
+            if hasattr(self, 'chapter_progress_container') and self.chapter_progress_container.winfo_exists():
+                for widget in self.chapter_progress_container.winfo_children():
+                    if widget.winfo_exists():
+                        widget.destroy()
+                
+                # 更新Canvas的滚动区域
+                if hasattr(self, 'progress_canvas') and self.progress_canvas.winfo_exists():
+                    self.progress_canvas.configure(scrollregion=self.progress_canvas.bbox("all"))
+        except Exception as e:
+            print(f"清除进度条时出错: {str(e)}")
     
     def add_file_to_queue(self, file_path):
         """添加文件到队列并更新显示"""
@@ -492,17 +541,26 @@ class TranslatorGUI:
         self.root.after(100, self._process_log_queue)
     
     def _process_log_queue(self):
-        # 处理日志队列中的所有消息
-        while not self.log_queue.empty():
-            message = self.log_queue.get()
-            self._log(message)
-        # 如果还在翻译，继续检查队列
-        if self.is_translating:
+        """处理日志队列"""
+        try:
+            while not self.log_queue.empty():
+                message = self.log_queue.get()
+                self._log(message)
+            # 如果还在翻译，继续检查队列
+            if self.is_translating:
+                self.root.after(100, self._process_log_queue)
+        except Exception as e:
+            print(f"处理日志队列时出错: {str(e)}")
+            # 出错后重新安排处理
             self.root.after(100, self._process_log_queue)
     
     def _log(self, message):
-        self.output_text.insert(tk.END, f"{message}\n")
-        self.output_text.see(tk.END)
+        """添加日志到输出区域"""
+        try:
+            self.output_text.insert(tk.END, f"{message}\n")
+            self.output_text.see(tk.END)
+        except Exception as e:
+            print(f"添加日志时出错: {str(e)}")
     
     def update_model_options(self):
         """根据选择的API提供商更新模型选项"""
@@ -570,13 +628,35 @@ class TranslatorGUI:
             elif provider == "Deepseek":
                 # Deepseek API调用
                 client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
-                return response.choices[0].message.content
+                
+                # 添加请求延迟
+                time.sleep(1)  # 每次请求前等待1秒
+                
+                try:
+                    response = client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens
+                    )
+                    return response.choices[0].message.content
+                except Exception as e:
+                    self.log(f"Deepseek API请求失败: {str(e)}")
+                    # 如果是速率限制错误，等待更长时间后重试
+                    if "rate limit" in str(e).lower():
+                        time.sleep(5)  # 等待5秒后重试
+                        try:
+                            response = client.chat.completions.create(
+                                model=model,
+                                messages=messages,
+                                temperature=temperature,
+                                max_tokens=max_tokens
+                            )
+                            return response.choices[0].message.content
+                        except Exception as retry_error:
+                            self.log(f"Deepseek API重试失败: {str(retry_error)}")
+                            return None
+                    return None
         except Exception as e:
             self.log(f"API调用出错: {str(e)}")
             return None
@@ -770,48 +850,121 @@ class TranslatorGUI:
             self.log(f"{'─'*30}")
             self.log(f"合并后的翻译结果已保存到: {merged_file_path}")
             
+            # 标记翻译完成
+            self.is_translating = False
+            
+            # 在主线程中处理完成后的操作
+            self.root.after(0, self._handle_translation_complete)
+            
         except Exception as e:
             self.log(f"\n{'='*60}")
             self.log("合并翻译结果时出错:")
             self.log(f"{'─'*30}")
             self.log(str(e))
             self.log(f"{'─'*30}")
+            # 即使出错也标记翻译完成
+            self.is_translating = False
+            self.root.after(0, self._handle_translation_complete)
 
-    def start_translation(self):
-        if not self.file_queue:
-            self.log("请先拖放markdown文件")
-            return
+    def _handle_translation_complete(self):
+        """处理翻译完成后的操作"""
+        try:
+            # 重置按钮状态
+            self._reset_button()
             
-        if self.is_translating:
-            self.log("翻译正在进行中，请等待...")
-            return
+            # 如果翻译正常完成（不是手动停止），询问是否删除缓存文件
+            if not self.should_stop:
+                self.root.after(500, lambda: self._ask_delete_cache(self.cache_path.get()))
+        except Exception as e:
+            print(f"处理翻译完成时出错: {str(e)}")
+
+    def _reset_button(self):
+        """重置按钮状态"""
+        try:
+            if self.root.winfo_exists():
+                self.start_button.state(['!disabled'])
+                self.root.update_idletasks()  # 强制更新UI
+                self.is_translating = False
+                self.is_paused = False
+                self.should_stop = False
+                self.current_file_index = -1
+        except Exception as e:
+            print(f"重置按钮状态时出错: {str(e)}")
+
+    def _ask_delete_cache(self, cache_dir):
+        """询问用户是否删除缓存目录中的文件"""
+        try:
+            if not self.root.winfo_exists():
+                return
+                
+            response = tk.messagebox.askyesno(
+                "删除缓存文件",
+                "所有文件翻译已完成，是否删除翻译过程中的缓存文件？"
+            )
             
-        # 禁用开始按钮
-        self.start_button.state(['disabled'])
-        self.is_translating = True
-        
-        # 在新线程中运行翻译过程
-        self.translation_thread = threading.Thread(target=self.translation_process)
-        self.translation_thread.daemon = True
-        self.translation_thread.start()
-    
+            if response:
+                try:
+                    if os.path.exists(cache_dir):
+                        # 删除目录中的所有文件
+                        for file_name in os.listdir(cache_dir):
+                            file_path = os.path.join(cache_dir, file_name)
+                            if os.path.isfile(file_path):
+                                os.remove(file_path)
+                                self.log(f"已删除缓存文件: {file_name}")
+                        self.log("所有缓存文件已删除")
+                except Exception as e:
+                    self.log(f"删除缓存文件时出错: {str(e)}")
+            else:
+                self.log("已保留缓存文件")
+        except Exception as e:
+            print(f"询问删除缓存文件时出错: {str(e)}")
+
+    def browse_result_path(self):
+        """浏览并选择翻译结果保存路径"""
+        try:
+            if not self.root.winfo_exists():
+                return
+            path = filedialog.askdirectory()
+            if path:
+                self.result_path.delete(0, tk.END)
+                self.result_path.insert(0, path)
+        except Exception as e:
+            print(f"选择结果保存路径时出错: {str(e)}")
+
+    def browse_cache_path(self):
+        """浏览并选择缓存文件保存路径"""
+        try:
+            if not self.root.winfo_exists():
+                return
+            path = filedialog.askdirectory()
+            if path:
+                self.cache_path.delete(0, tk.END)
+                self.cache_path.insert(0, path)
+        except Exception as e:
+            print(f"选择缓存保存路径时出错: {str(e)}")
+
     def translation_process(self):
+        """翻译处理主函数"""
         try:
             # 遍历文件队列
             for i, file_path in enumerate(self.file_queue):
+                if self.should_stop:
+                    break
+                    
                 self.current_file_index = i
                 self.file_path = file_path
                 
                 # 更新文件状态
                 self.update_file_status(file_path, "翻译中")
-                self.update_queue_display()
                 
                 # 清除之前的输出信息
-                self.output_text.delete(1.0, tk.END)
+                if self.root.winfo_exists():
+                    self.output_text.delete(1.0, tk.END)
                 
                 # 重置进度条
-                self.total_progress_var.set(0)
-                self.current_chapter_label.config(text="")
+                if self.root.winfo_exists():
+                    self.total_progress_var.set(0)
+                    self.current_chapter_label.config(text="")
                 
                 # 清除之前的进度条
                 self.clear_chapter_progress()
@@ -860,11 +1013,17 @@ class TranslatorGUI:
                     
                     # 等待所有任务完成
                     for future in as_completed(future_to_chapter):
+                        if self.should_stop:
+                            break
                         chapter_index = future_to_chapter[future]
                         try:
                             success = future.result()
                         except Exception as e:
                             self.log(f"第 {chapter_index} 章处理失败: {str(e)}")
+                
+                if self.should_stop:
+                    self.log("翻译任务已停止")
+                    break
                 
                 # 合并翻译结果
                 self.merge_translation_results()
@@ -876,12 +1035,10 @@ class TranslatorGUI:
                 self.log(f"文件 {file_path} 翻译完成！")
                 self.log(f"{'='*60}")
             
-            self.log(f"\n{'='*60}")
-            self.log("所有文件翻译完成！")
-            self.log(f"{'='*60}")
-            
-            # 所有文件翻译完成后，询问是否删除缓存文件
-            self.root.after(0, self._ask_delete_cache, self.cache_path.get())
+            if not self.should_stop:
+                self.log(f"\n{'='*60}")
+                self.log("所有文件翻译完成！")
+                self.log(f"{'='*60}")
             
         except Exception as e:
             self.log(f"\n{'='*60}")
@@ -889,49 +1046,103 @@ class TranslatorGUI:
             self.log(f"{'─'*30}")
             self.log(str(e))
             self.log(f"{'─'*30}")
+
+    def update_progress_display(self):
+        """更新所有进度显示"""
+        # 更新总进度
+        if hasattr(self, 'total_paragraphs') and self.total_paragraphs > 0:
+            progress = (self.completed_paragraphs / self.total_paragraphs) * 100
+            self.total_progress_var.set(progress)
+            self.current_chapter_label.config(text=f"已翻译: {self.completed_paragraphs}/{self.total_paragraphs} 段")
+        
+        # 更新章节进度
+        for chapter_index, progress_var in self.chapter_progress_vars.items():
+            if chapter_index in self.translation_results:
+                result = self.translation_results[chapter_index]
+                if 'conversation' in result:
+                    assistant_messages = [msg for msg in result['conversation'] if msg['role'] == 'assistant'][1:]
+                    completed = len(assistant_messages)
+                    total = len([msg for msg in result['conversation'] if msg['role'] == 'user'][1:])
+                    if total > 0:
+                        progress = (completed / total) * 100
+                        progress_var.set(progress)
+
+    def on_window_minimize(self, event):
+        """窗口最小化时的处理"""
+        # 最小化时不暂停翻译，只记录日志
+        self.log("程序已最小化，翻译将继续在后台运行...")
+
+    def on_window_restore(self, event):
+        """窗口恢复时的处理"""
+        # 窗口恢复时更新UI，但不重复记录日志
+        if self.is_translating:
+            self.update_queue_display()
+            self.update_progress_display()
+
+    def _check_translation_progress(self):
+        """定期检查翻译进度并更新UI"""
+        if not self.is_translating:
+            return
+            
+        try:
+            # 更新队列显示
+            self.update_queue_display()
+            
+            # 更新进度显示
+            self.update_progress_display()
+            
+            # 检查翻译线程是否还在运行
+            if self.translation_thread and self.translation_thread.is_alive():
+                # 继续检查
+                self.root.after(100, self._check_translation_progress)
+            else:
+                # 翻译线程结束，但等待合并完成
+                if self.is_translating:
+                    self.root.after(100, self._check_translation_progress)
+        except Exception as e:
+            print(f"检查翻译进度时出错: {str(e)}")
+            # 出错时也继续检查
+            self.root.after(100, self._check_translation_progress)
+
+    def start_translation(self):
+        """开始翻译过程"""
+        if not self.file_queue:
+            self.log("请先拖放markdown文件")
+            return
+            
+        if self.is_translating:
+            self.log("翻译正在进行中，请等待...")
+            return
+            
+        # 禁用开始按钮并立即更新UI
+        self.start_button.state(['disabled'])
+        self.root.update_idletasks()  # 强制更新UI
+        
+        # 设置翻译状态
+        self.is_translating = True
+        self.is_paused = False
+        self.should_stop = False
+        
+        # 清除之前的进度条
+        self.clear_chapter_progress()
+        
+        # 在新线程中运行翻译过程
+        self.translation_thread = threading.Thread(target=self._run_translation)
+        self.translation_thread.daemon = True
+        self.translation_thread.start()
+        
+        # 启动进度更新检查
+        self._check_translation_progress()
+
+    def _run_translation(self):
+        """在新线程中运行翻译过程"""
+        try:
+            self.translation_process()
+        except Exception as e:
+            self.log(f"翻译过程出错: {str(e)}")
         finally:
-            # 恢复开始按钮状态
+            # 重置按钮状态
             self.root.after(0, self._reset_button)
-    
-    def _reset_button(self):
-        self.start_button.state(['!disabled'])
-        self.is_translating = False
-        self.current_file_index = -1
-
-    def browse_result_path(self):
-        """浏览并选择翻译结果保存路径"""
-        path = filedialog.askdirectory()
-        if path:
-            self.result_path.delete(0, tk.END)
-            self.result_path.insert(0, path)
-
-    def browse_cache_path(self):
-        """浏览并选择缓存文件保存路径"""
-        path = filedialog.askdirectory()
-        if path:
-            self.cache_path.delete(0, tk.END)
-            self.cache_path.insert(0, path)
-
-    def _ask_delete_cache(self, cache_dir):
-        """询问用户是否删除缓存目录中的文件"""
-        response = tk.messagebox.askyesno(
-            "删除缓存文件",
-            "所有文件翻译已完成，是否删除翻译过程中的缓存文件？"
-        )
-        if response:
-            try:
-                if os.path.exists(cache_dir):
-                    # 删除目录中的所有文件
-                    for file_name in os.listdir(cache_dir):
-                        file_path = os.path.join(cache_dir, file_name)
-                        if os.path.isfile(file_path):
-                            os.remove(file_path)
-                            self.log(f"已删除缓存文件: {file_name}")
-                    self.log("所有缓存文件已删除")
-            except Exception as e:
-                self.log(f"删除缓存文件时出错: {str(e)}")
-        else:
-            self.log("已保留缓存文件")
 
 def main():
     root = tkdnd.TkinterDnD.Tk()
