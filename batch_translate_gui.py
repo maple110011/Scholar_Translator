@@ -919,14 +919,11 @@ class TranslatorGUI:
                 if len(messages) > 10:  # 保留最近的10条消息
                     messages = messages[:2] + messages[-8:]  # 保留开头的2条和最近的8条
             
-            # 只保存必要的翻译结果到内存
+            # 记录缓存文件路径
             self.translation_results[chapter_index] = {
                 'title': title,
                 'filename': os.path.basename(cache_file) if cache_file else None
             }
-            
-            # 清理过期的章节缓存
-            self._cleanup_chapter_cache()
             
             return True
         except Exception as e:
