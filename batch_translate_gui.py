@@ -143,7 +143,7 @@ class TranslatorGUI:
         ttk.Label(self.param_frame, text="API Key:").grid(row=1, column=0, sticky=tk.W, padx=5)
         self.api_key = ttk.Entry(self.param_frame, width=50)
         self.api_key.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5)
-        self.api_key.insert(0, "sk-fd52737a69064f51a34a091d8331fdf6")
+        self.api_key.insert(0, "your API key")
         
         # 模型设置
         ttk.Label(self.param_frame, text="模型:").grid(row=2, column=0, sticky=tk.W, padx=5)
